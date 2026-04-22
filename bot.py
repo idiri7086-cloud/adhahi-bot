@@ -1,109 +1,127 @@
 import os
 import json
-import time
 import logging
 import asyncio
 import requests
 from telebot import TeleBot
 from playwright.async_api import async_playwright
 
-# Configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8594674187:AAF-X2MEcEs8U2MtGDHiRnZhFacojYyjVDU")
-CHAT_ID = os.getenv("CHAT_ID", "7367592776")
-CHECK_INTERVAL = 700  # seconds
+# ====== CONFIG ======
+BOT_TOKEN = os.getenv("8594674187:AAF-X2MEcEs8U2MtGDHiRnZhFacojYyjVDU")
+CHAT_ID = os.getenv("7367592776")
+CHECK_INTERVAL = 600
 DATA_FILE = "state.json"
 SITE_URL = "https://adhahi.dz/register"
-API_URL = "https://adhahi.dz/api/wilayas" # Potential API endpoint based on research
 
-# Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = TeleBot(BOT_TOKEN)
 
-# List of 58 states (Wilayas)
 WILAYAS = [
-    "أدرار", "الشلف", "الأغواط", "أم البواقي", "باتنة", "بجاية", "بسكرة", "بشار", "البليدة", "البويرة",
-    "تمنراست", "تبسة", "تلمسان", "تيارت", "تيزي وزو", "الجزائر", "الجلفة", "جيجل", "سطيف", "سعيدة",
-    "سكيكدة", "سيدي بلعباس", "عنابة", "قالمة", "قسنطينة", "المدية", "مستغانم", "المسيلة", "معسكر", "ورقلة",
-    "وهران", "البيض", "إليزي", "برج بوعريريج", "بومرداس", "الطارف", "تندوف", "تسمسيلت", "الوادي", "خنشلة",
-    "سوق أهراس", "تيبازة", "ميلة", "عين الدفلى", "النعامة", "عين تموشنت", "غرداية", "غليزان", "تيميمون", "برج باجي مختار",
-    "أولاد جلال", "بني عباس", "عين صالح", "عين قزام", "تقرت", "جانت", "المغير", "المنيعة"
+    "أدرار","الشلف","الأغواط","أم البواقي","باتنة","بجاية","بسكرة","بشار","البليدة","البويرة",
+    "تمنراست","تبسة","تلمسان","تيارت","تيزي وزو","الجزائر","الجلفة","جيجل","سطيف","سعيدة",
+    "سكيكدة","سيدي بلعباس","عنابة","قالمة","قسنطينة","المدية","مستغانم","المسيلة","معسكر","ورقلة",
+    "وهران","البيض","إليزي","برج بوعريريج","بومرداس","الطارف","تندوف","تسمسيلت","الوادي","خنشلة",
+    "سوق أهراس","تيبازة","ميلة","عين الدفلى","النعامة","عين تموشنت","غرداية","غليزان","تيميمون","برج باجي مختار",
+    "أولاد جلال","بني عباس","عين صالح","عين قزام","تقرت","جانت","المغير","المنيعة"
 ]
 
+# ====== FILE ======
 def load_status():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-def save_status(status):
+def save_status(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(status, f, ensure_ascii=False, indent=4)
+        json.dump(data, f, ensure_ascii=False)
 
-async def check_site_playwright():
-    """
-    Uses Playwright to scrape the site and find available states.
-    """
-    available_states = {}
+# ====== SCRAPER ======
+async def check_site():
+    result = {}
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                ignore_https_errors=True
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu"
+                ]
             )
-            page = await context.new_page()
-            
-            # Navigate and wait for content
-            await page.goto(SITE_URL, wait_until="networkidle", timeout=60000)
-            
-            # Wait for the search input to ensure the list is loaded
-            await page.wait_for_selector("input[placeholder*='ابحث بالاسم']", timeout=30000)
-            
-            # Click to show the list
-            await page.click("input[placeholder*='ابحث بالاسم']")
-            await asyncio.sleep(2)
-            
-            # Extract states and their status
-            states_info = await page.evaluate("""
-                () => {
-                    const results = [];
-                    const elements = Array.from(document.querySelectorAll('*'));
-                    for (const el of elements) {
-                        const text = el.innerText;
-                        if (text.includes(' — حجز متوفر') || text.includes(' — حجز غير متوفر حاليًا')) {
-                            if (el.children.length === 0 || (el.children.length > 0 && !el.innerHTML.includes('<div'))) {
-                                results.push(text);
-                            }
-                        }
-                    }
-                    return results;
-                }
-            """)
-            
-            for entry in states_info:
-                for wilaya in WILAYAS:
-                    if wilaya in entry:
-                        is_available = "حجز متوفر" in entry and "غير متوفر" not in entry
-                        available_states[wilaya] = is_available
-                        break
-            
-            await browser.close()
-    except Exception as e:
-        logger.error(f"Playwright error: {e}")
-        # Fallback to API if playwright fails
-        return await check_site_api()
-        
-    return available_states
 
-async def check_site_api():
-    """
-    Fallback method using direct API requests if available.
-    """
+            page = await browser.new_page()
+            await page.goto(SITE_URL, timeout=60000)
+            await page.wait_for_timeout(5000)
+
+            content = await page.content()
+
+            for w in WILAYAS:
+                if w in content:
+                    if "حجز متوفر" in content:
+                        result[w] = True
+                    else:
+                        result[w] = False
+
+            await browser.close()
+
+    except Exception as e:
+        logger.error(f"Error: {e}")
+
+    return result
+
+# ====== COMMANDS ======
+@bot.message_handler(commands=['start'])
+def start(msg):
+    bot.reply_to(msg, "🚀 البوت يعمل!\n\n/status\n/list")
+
+@bot.message_handler(commands=['status'])
+def status(msg):
+    data = load_status()
+    available = [w for w, s in data.items() if s]
+
+    if available:
+        bot.reply_to(msg, "✅ المتوفر:\n" + "\n".join(available))
+    else:
+        bot.reply_to(msg, "❌ لا يوجد متوفر")
+
+@bot.message_handler(commands=['list'])
+def list_all(msg):
+    data = load_status()
+
+    if not data:
+        bot.reply_to(msg, "⏳ جاري جمع البيانات...")
+        return
+
+    text = ""
+    for w, s in data.items():
+        text += f"{w} {'✅' if s else '❌'}\n"
+
+    bot.reply_to(msg, text)
+
+# ====== LOOP ======
+async def monitor():
+    bot.send_message(CHAT_ID, "🚀 تم تشغيل البوت")
+
+    while True:
+        data = await check_site()
+
+        if data:
+            save_status(data)
+
+        await asyncio.sleep(CHECK_INTERVAL)
+
+# ====== RUN ======
+import threading
+
+def run_bot():
+    bot.infinity_polling()
+
+threading.Thread(target=run_bot).start()
+
+asyncio.run(monitor())    """
     available_states = {}
     try:
         headers = {
