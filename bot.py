@@ -4,83 +4,57 @@ import logging
 import asyncio
 import requests
 from telebot import TeleBot
-from playwright.async_api import async_playwright
 
-# ====== CONFIG ======
+# ===== CONFIG =====
 BOT_TOKEN = os.getenv("8594674187:AAF-X2MEcEs8U2MtGDHiRnZhFacojYyjVDU")
 CHAT_ID = os.getenv("7367592776")
-CHECK_INTERVAL = 600
+CHECK_INTERVAL = 300
 DATA_FILE = "state.json"
-SITE_URL = "https://adhahi.dz/register"
+URL = "https://adhahi.dz/api/wilayas"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = TeleBot(BOT_TOKEN)
 
-WILAYAS = [
-    "أدرار","الشلف","الأغواط","أم البواقي","باتنة","بجاية","بسكرة","بشار","البليدة","البويرة",
-    "تمنراست","تبسة","تلمسان","تيارت","تيزي وزو","الجزائر","الجلفة","جيجل","سطيف","سعيدة",
-    "سكيكدة","سيدي بلعباس","عنابة","قالمة","قسنطينة","المدية","مستغانم","المسيلة","معسكر","ورقلة",
-    "وهران","البيض","إليزي","برج بوعريريج","بومرداس","الطارف","تندوف","تسمسيلت","الوادي","خنشلة",
-    "سوق أهراس","تيبازة","ميلة","عين الدفلى","النعامة","عين تموشنت","غرداية","غليزان","تيميمون","برج باجي مختار",
-    "أولاد جلال","بني عباس","عين صالح","عين قزام","تقرت","جانت","المغير","المنيعة"
-]
-
-# ====== FILE ======
-def load_status():
+# ===== FILE =====
+def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-def save_status(data):
+def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
 
-# ====== SCRAPER ======
-async def check_site():
-    result = {}
+# ===== SCRAPER =====
+def fetch_data():
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu"
-                ]
-            )
+        r = requests.get(URL, timeout=20)
+        data = r.json()
 
-            page = await browser.new_page()
-            await page.goto(SITE_URL, timeout=60000)
-            await page.wait_for_timeout(5000)
+        result = {}
+        for item in data:
+            name = item.get("name_ar") or item.get("name")
+            status = item.get("available") or item.get("status") == "active"
+            result[name] = status
 
-            content = await page.content()
-
-            for w in WILAYAS:
-                if w in content:
-                    if "حجز متوفر" in content:
-                        result[w] = True
-                    else:
-                        result[w] = False
-
-            await browser.close()
+        return result
 
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(e)
+        return {}
 
-    return result
-
-# ====== COMMANDS ======
+# ===== COMMANDS =====
 @bot.message_handler(commands=['start'])
 def start(msg):
-    bot.reply_to(msg, "🚀 البوت يعمل!\n\n/status\n/list")
+    bot.reply_to(msg, "🚀 البوت يعمل\n/status\n/list")
 
 @bot.message_handler(commands=['status'])
 def status(msg):
-    data = load_status()
-    available = [w for w, s in data.items() if s]
+    data = load_data()
+    available = [k for k, v in data.items() if v]
 
     if available:
         bot.reply_to(msg, "✅ المتوفر:\n" + "\n".join(available))
@@ -89,21 +63,37 @@ def status(msg):
 
 @bot.message_handler(commands=['list'])
 def list_all(msg):
-    data = load_status()
+    data = load_data()
 
     if not data:
         bot.reply_to(msg, "⏳ جاري جمع البيانات...")
         return
 
     text = ""
-    for w, s in data.items():
-        text += f"{w} {'✅' if s else '❌'}\n"
+    for k, v in data.items():
+        text += f"{k} {'✅' if v else '❌'}\n"
 
     bot.reply_to(msg, text)
 
-# ====== LOOP ======
+# ===== LOOP =====
 async def monitor():
     bot.send_message(CHAT_ID, "🚀 تم تشغيل البوت")
+
+    while True:
+        data = fetch_data()
+        if data:
+            save_data(data)
+        await asyncio.sleep(CHECK_INTERVAL)
+
+# ===== RUN =====
+import threading
+
+def run_bot():
+    bot.infinity_polling()
+
+threading.Thread(target=run_bot).start()
+
+asyncio.run(monitor())    bot.send_message(CHAT_ID, "🚀 تم تشغيل البوت")
 
     while True:
         data = await check_site()
